@@ -15,6 +15,9 @@ import numpy as np
 import sys
 import matplotlib.pyplot as plt
 from torchsummary import summary
+from collections import Iterable
+
+
 
 
 torch.manual_seed(1)
@@ -96,7 +99,7 @@ class Extractor(nn.Module):
         return x, hidden
 
 class HSICBottleneck:
-    def __init__(self, model, batch_size, lambda_0, sigma, lr=0.01):   
+    def __init__(self, model, batch_size, lambda_0, sigma, multi_sigma=None,lr=0.01):   
         # self.model      = model
         self.model      = Extractor(model)
         self.batch_size = batch_size
@@ -105,6 +108,8 @@ class HSICBottleneck:
         self.extractor  = 'hsic'
         # self.trainable  = []
         self.lr         = lr
+        self.multi_sigma = multi_sigma
+        assert isinstance(self.multi_sigma, Iterable) if  multi_sigma is not None else True
         
         summary(model, input_size=(10, ))
         self.opt = optim.RMSprop(self.model.parameters(), lr)
@@ -121,7 +126,6 @@ class HSICBottleneck:
         y_pred, hidden_zs = self.model(input_data)
         
         for name, layer in self.model.named_children():
-            #TODO
             if self.extractor in name:
                 hidden_z = hidden_zs[name]
                 Kz = kernel_matrix(hidden_z, self.sigma)
@@ -137,7 +141,39 @@ class HSICBottleneck:
         return total_loss.item()
 
     def multi_sigma_step(self, input_data, labels):
-        pass
+        # TODO
+        if self.multi_sigma is None:
+            return self.step(input_data, labels)
+        Kx = []
+        Ky = []
+        
+        for sigma in self.multi_sigma:
+            Kx.append(kernel_matrix(input_data, self.sigma))
+            Ky.append(kernel_matrix(labels, self.sigma))
+        
+        total_loss = 0.
+        
+        y_pred, hidden_zs = self.model(input_data)
+        
+        for name, layer in self.model.named_children():
+            #TODO
+            if self.extractor in name:
+                hidden_z = hidden_zs[name]
+                Kz = []
+                for sigma in self.multi_sigma:
+                    Kz.append(kernel_matrix(hidden_z, self.sigma))
+                loss = 0.
+                for i in range(len(self.multi_sigma)):
+                    loss += HSIC(Kz[i], Kx[i], self.batch_size) - self.lambda_0*HSIC(Kz[i], Ky[i], self.batch_size)
+                total_loss += loss
+        
+        self.opt.zero_grad()
+        total_loss.backward()
+        self.opt.step()
+        
+        self.remember.append(total_loss.item())
+                
+        return total_loss.item()
     
 
 
